@@ -1,8 +1,8 @@
 import os
 import asyncio
 import discord
-from discord.ext import commands
 from discord import app_commands
+from discord.ext import commands
 from aiohttp import web
 
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -30,24 +30,24 @@ class VCNameModal(discord.ui.Modal, title="VCを作成"):
 
         category = None
 
-        # 今いるVCと同じカテゴリ
+        # 今いるVCと同じカテゴリに作る
         if member.voice and member.voice.channel:
             category = member.voice.channel.category
 
-        # いなければ現在のチャンネルカテゴリ
+        # いなければ現在のテキストチャンネルと同じカテゴリ
         if category is None and interaction.channel:
             category = interaction.channel.category
 
         vc = await guild.create_voice_channel(
             name=str(self.vc_name),
             category=category,
-            reason="Temporary VC created"
+            reason="Temporary VC created by VCMakeBot"
         )
 
         temporary_vcs.add(vc.id)
 
         await interaction.response.send_message(
-            f"VCを作成しました：{vc.mention}\n誰もいなくなってから15分後に削除されます。",
+            f"VCを作成しました：{vc.mention}\n誰もいなくなってから15分後に自動削除されます。",
             ephemeral=True
         )
 
@@ -61,7 +61,7 @@ class VCPanelView(discord.ui.View):
         style=discord.ButtonStyle.primary,
         custom_id="create_vc_button"
     )
-    async def create_vc_button(
+    async def create_vc(
         self,
         interaction: discord.Interaction,
         button: discord.ui.Button
@@ -75,7 +75,7 @@ async def on_ready():
 
     try:
         synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} commands")
+        print(f"Synced {len(synced)} command(s)")
     except Exception as e:
         print(e)
 
@@ -84,16 +84,15 @@ async def on_ready():
 
 @bot.tree.command(
     name="vcpanel",
-    description="VC作成パネルを設置します"
+    description="VC作成ボタンを設置します"
 )
 @app_commands.checks.has_permissions(manage_channels=True)
 async def vcpanel(interaction: discord.Interaction):
-
     embed = discord.Embed(
-        title="VC作成パネル",
+        title="一時VC作成",
         description=(
-            "下のボタンから一時VCを作成できます。\n"
-            "誰もいなくなって15分経過すると自動削除されます。"
+            "下のボタンを押すと、一時VCを作成できます。\n"
+            "誰もいなくなってから15分後に自動削除されます。"
         ),
         color=discord.Color.blurple()
     )
@@ -106,13 +105,10 @@ async def vcpanel(interaction: discord.Interaction):
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-
     if before.channel and before.channel.id in temporary_vcs:
-
         vc = before.channel
 
         if len(vc.members) == 0:
-
             await asyncio.sleep(DELETE_AFTER_SECONDS)
 
             try:
@@ -121,18 +117,15 @@ async def on_voice_state_update(member, before, after):
                     await vc.delete(
                         reason="Temporary VC empty for 15 minutes"
                     )
-
             except discord.NotFound:
                 temporary_vcs.discard(vc.id)
 
 
-# Render用Webサーバー
 async def health_check(request):
     return web.Response(text="VCMakeBot is running")
 
 
 async def start_web_server():
-
     app = web.Application()
     app.router.add_get("/", health_check)
 
@@ -141,12 +134,7 @@ async def start_web_server():
     runner = web.AppRunner(app)
     await runner.setup()
 
-    site = web.TCPSite(
-        runner,
-        host="0.0.0.0",
-        port=port
-    )
-
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
 
