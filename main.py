@@ -3,7 +3,6 @@ import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands
-from aiohttp import web
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 DELETE_AFTER_SECONDS = 15 * 60
@@ -24,31 +23,131 @@ class VCNameModal(discord.ui.Modal, title="VCを作成"):
         max_length=50
     )
 
+    channel_status = discord.ui.TextInput(
+        label="チャンネルステータス（任意）",
+        placeholder="例：@2 / 募集中 / 聞き専OK",
+        max_length=50,
+        required=False
+    )
+
+    def __init__(self, selected_role: discord.Role | None):
+        super().__init__()
+        self.selected_role = selected_role
+
     async def on_submit(self, interaction: discord.Interaction):
         guild = interaction.guild
         member = interaction.user
 
         category = None
 
-        # 今いるVCと同じカテゴリに作る
         if member.voice and member.voice.channel:
             category = member.voice.channel.category
 
-        # いなければ現在のテキストチャンネルと同じカテゴリ
         if category is None and interaction.channel:
             category = interaction.channel.category
+
+        overwrites = None
+
+        if self.selected_role:
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(
+                    view_channel=True,
+                    connect=False
+                ),
+                self.selected_role: discord.PermissionOverwrite(
+                    view_channel=True,
+                    connect=True
+                ),
+                member: discord.PermissionOverwrite(
+                    view_channel=True,
+                    connect=True,
+                    manage_channels=True
+                ),
+                guild.me: discord.PermissionOverwrite(
+                    view_channel=True,
+                    connect=True,
+                    manage_channels=True,
+                    move_members=True
+                )
+            }
 
         vc = await guild.create_voice_channel(
             name=str(self.vc_name),
             category=category,
+            overwrites=overwrites,
             reason="Temporary VC created by VCMakeBot"
         )
 
         temporary_vcs.add(vc.id)
 
-        await interaction.response.send_message(
-            f"VCを作成しました：{vc.mention}\n誰もいなくなってから15分後に自動削除されます。",
-            ephemeral=True
+        # チャンネルステータス設定
+        status_text = str(self.channel_status).strip()
+        if status_text:
+            try:
+                await vc.edit(status=status_text)
+            except Exception:
+                pass
+
+        # 作成者を自動でVCへ移動
+        moved = False
+        if member.voice:
+            try:
+                await member.move_to(vc)
+                moved = True
+            except Exception:
+                moved = False
+
+        role_text = self.selected_role.mention if self.selected_role else "制限なし"
+
+        msg = (
+            f"VCを作成しました：{vc.mention}\n"
+            f"入室できるロール：{role_text}\n"
+            f"誰もいなくなってから15分後に自動削除されます。"
+        )
+
+        if not moved:
+            msg += "\n※あなたがVCに入っていなかったため、自動移動はできませんでした。"
+
+        await interaction.response.send_message(msg, ephemeral=True)
+
+
+class RoleSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.selected_role = None
+
+    @discord.ui.select(
+        cls=discord.ui.RoleSelect,
+        placeholder="入ってこれるロールを選択（任意）",
+        min_values=0,
+        max_values=1
+    )
+    async def role_select(
+        self,
+        interaction: discord.Interaction,
+        select: discord.ui.RoleSelect
+    ):
+        if select.values:
+            self.selected_role = select.values[0]
+            await interaction.response.send_message(
+                f"選択中のロール：{self.selected_role.mention}",
+                ephemeral=True
+            )
+        else:
+            self.selected_role = None
+            await interaction.response.send_message(
+                "ロール制限なしにしました。",
+                ephemeral=True
+            )
+
+    @discord.ui.button(label="入力へ", style=discord.ButtonStyle.primary)
+    async def open_modal(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        await interaction.response.send_modal(
+            VCNameModal(self.selected_role)
         )
 
 
@@ -66,7 +165,11 @@ class VCPanelView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-        await interaction.response.send_modal(VCNameModal())
+        await interaction.response.send_message(
+            "入ってこれるロールを選んでください。\n制限しない場合は、そのまま「入力へ」を押してください。",
+            view=RoleSelectView(),
+            ephemeral=True
+        )
 
 
 @bot.event
@@ -92,6 +195,7 @@ async def vcpanel(interaction: discord.Interaction):
         title="一時VC作成",
         description=(
             "下のボタンを押すと、一時VCを作成できます。\n"
+            "VC名、チャンネルステータス、入室可能ロールを設定できます。\n"
             "誰もいなくなってから15分後に自動削除されます。"
         ),
         color=discord.Color.blurple()
@@ -121,26 +225,4 @@ async def on_voice_state_update(member, before, after):
                 temporary_vcs.discard(vc.id)
 
 
-async def health_check(request):
-    return web.Response(text="VCMakeBot is running")
-
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", health_check)
-
-    port = int(os.getenv("PORT", 10000))
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-
-
-async def main():
-    await start_web_server()
-    await bot.start(TOKEN)
-
-
-asyncio.run(main())
+bot.run(TOKEN)
