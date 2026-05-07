@@ -3,6 +3,7 @@ import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands
+from aiohttp import web
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 DELETE_AFTER_SECONDS = 15 * 60
@@ -80,7 +81,6 @@ class VCNameModal(discord.ui.Modal, title="VCを作成"):
 
         temporary_vcs.add(vc.id)
 
-        # チャンネルステータス設定
         status_text = str(self.channel_status).strip()
         if status_text:
             try:
@@ -88,7 +88,6 @@ class VCNameModal(discord.ui.Modal, title="VCを作成"):
             except Exception:
                 pass
 
-        # 作成者を自動でVCへ移動
         moved = False
         if member.voice:
             try:
@@ -166,7 +165,8 @@ class VCPanelView(discord.ui.View):
         button: discord.ui.Button
     ):
         await interaction.response.send_message(
-            "入ってこれるロールを選んでください。\n制限しない場合は、そのまま「入力へ」を押してください。",
+            "入ってこれるロールを選んでください。\n"
+            "制限しない場合は、そのまま「入力へ」を押してください。",
             view=RoleSelectView(),
             ephemeral=True
         )
@@ -225,4 +225,26 @@ async def on_voice_state_update(member, before, after):
                 temporary_vcs.discard(vc.id)
 
 
-bot.run(TOKEN)
+async def health_check(request):
+    return web.Response(text="VCMakeBot is running")
+
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", health_check)
+
+    port = int(os.getenv("PORT", 10000))
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+
+async def main():
+    await start_web_server()
+    await bot.start(TOKEN)
+
+
+asyncio.run(main())
